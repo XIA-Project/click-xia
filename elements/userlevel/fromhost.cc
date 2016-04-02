@@ -61,6 +61,9 @@ FromHost::configure(Vector<String> &conf, ErrorHandler *errh)
     if (Args(conf, this, errh)
 	.read_mp("DEVNAME", _dev_name)
 	.read_p("DST", IPPrefixArg(), _near, _mask)
+        .read("CLICK_XUDP_ADDR",_click_xudp_addr)
+        .read("CLICK_XTRANSPORT_ADDR",_click_xtransport_addr)
+
 	.read("GATEWAY", _gw)
 #if HAVE_IP6 && 0
 	// XXX
@@ -176,6 +179,26 @@ FromHost::setup_tun(ErrorHandler *errh)
 	up = "";
     }
 #endif
+    if (_mtu_out) {
+	sa.clear();
+	sa << "/sbin/ifconfig " << _dev_name << " mtu " << _mtu_out  << " 2>/dev/null";
+	if (system(sa.c_str()) != 0)
+	    return errh->error("%s: %<%s%> failed", _dev_name.c_str(), sa.c_str());
+    }
+
+    if (_click_xudp_addr) {
+	sa.clear();
+	sa << "/usr/sbin/arp -s -i " << _dev_name << " " << _click_xudp_addr << " 00:00:00:01:00:00 "  << " 2>/dev/null";
+	if (system(sa.c_str()) != 0)
+	    return errh->error("%s: %<%s%> failed", _dev_name.c_str(), sa.c_str());
+    }
+
+    if (_click_xtransport_addr) {
+	sa.clear();
+	sa << "/usr/sbin/arp -s -i " << _dev_name << " " << _click_xtransport_addr << " 00:00:00:01:00:00 "  << " 2>/dev/null";
+	if (system(sa.c_str()) != 0)
+	    return errh->error("%s: %<%s%> failed", _dev_name.c_str(), sa.c_str());
+    }
 
     // calculate maximum packet size needed to receive data from
     // tun/tap.

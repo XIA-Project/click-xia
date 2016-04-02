@@ -4,6 +4,10 @@
 #include <click/ipaddress.hh>
 #include <click/glue.hh>
 #include <click/timestamp.hh>
+#if HAVE_XIA
+#include <clicknet/xia.h>
+#include <click/xid.hh>
+#endif
 #if CLICK_LINUXMODULE
 # include <click/skbmgr.hh>
 #else
@@ -20,6 +24,9 @@
 #endif
 #ifndef CLICK_PACKET_DEPRECATED_ENUM
 # define CLICK_PACKET_DEPRECATED_ENUM CLICK_DEPRECATED_ENUM
+#endif
+#if HAVE_XIA
+struct click_xia;
 #endif
 struct click_ether;
 struct click_ip;
@@ -314,6 +321,11 @@ class Packet { public:
     inline void set_ip6_header(const click_ip6 *ip6h);
     inline void set_ip6_header(const click_ip6 *ip6h, uint32_t len);
 
+	#if HAVE_XIA
+    inline void set_xia_header(const click_xia *xiah, uint32_t len);
+    inline const click_xia *xia_header() const;
+	#endif
+
     inline const click_icmp *icmp_header() const;
     inline const click_tcp *tcp_header() const;
     inline const click_udp *udp_header() const;
@@ -346,7 +358,11 @@ class Packet { public:
     //@{
 
     enum {
-	anno_size = 48			///< Size of annotation area.
+	#if HAVE_XIA
+	anno_size = 92			///< Size of annotation area.
+	#else
+	anno_size = 56			///< Size of annotation area.
+	#endif
     };
 
     /** @brief Return the timestamp annotation. */
@@ -421,8 +437,27 @@ class Packet { public:
 
     enum {
 	dst_ip_anno_offset = 0, dst_ip_anno_size = 4,
-	dst_ip6_anno_offset = 0, dst_ip6_anno_size = 16
+    dst_ip6_anno_offset = 0, dst_ip6_anno_size = 16,
+#if HAVE_XIA
+    src_ip_anno_offset = 52, src_ip_anno_size = 4,
+	nexthop_neighbor_xid_anno_offset = 64, nexthop_neighbor_xid_anno_size = 24
+#else
+	src_ip_anno_offset = 52, src_ip_anno_size = 4
+#endif
     };
+
+
+#if HAVE_XIA
+    /** @brief Return the nexthop_neighbor_xid annotation.
+     *
+     * The value is taken from the address annotation area. */
+    inline XID nexthop_neighbor_xid_anno() const;
+
+    /** @brief Set the destination IPv4 address annotation.
+     *
+     * The value is stored in the address annotation area. */
+    inline void set_nexthop_neighbor_xid_anno(XID x);
+#endif
 
     /** @brief Return the destination IPv4 address annotation.
      *
@@ -433,6 +468,16 @@ class Packet { public:
      *
      * The value is stored in the address annotation area. */
     inline void set_dst_ip_anno(IPAddress addr);
+
+    /** @brief Return the source IPv4 address annotation.
+     *
+     * The value is taken from the address annotation area. */
+    inline IPAddress src_ip_anno() const;
+
+    /** @brief Set the source IPv4 address annotation.
+     *
+     * The value is stored in the address annotation area. */
+    inline void set_src_ip_anno(IPAddress addr);
 
     /** @brief Return a pointer to the annotation area.
      *
@@ -789,6 +834,9 @@ class WritablePacket : public Packet { public:
     inline click_ip *ip_header() const;
     inline click_ip6 *ip6_header() const;
     inline unsigned char *transport_header() const;
+#if HAVE_XIA
+    inline click_xia *xia_header() const;
+#endif
     inline click_icmp *icmp_header() const;
     inline click_tcp *tcp_header() const;
     inline click_udp *udp_header() const;
@@ -1169,6 +1217,18 @@ Packet::ether_header() const
 {
     return reinterpret_cast<const click_ether *>(mac_header());
 }
+
+#if HAVE_XIA
+/** @brief Return the packet's network header pointer as XIA header.
+ * @invariant (void *) xia_header() == (void *) network_header()
+ * @warning Not useful if !has_network_header().
+ * @sa network_header */
+inline const click_xia *
+Packet::xia_header() const
+{
+    return reinterpret_cast<const click_xia *>(network_header());
+}
+#endif
 
 /** @brief Return the packet's network header pointer as IPv4.
  * @invariant (void *) ip_header() == (void *) network_header()
@@ -1739,6 +1799,33 @@ Packet::change_headroom_and_length(uint32_t headroom, uint32_t length)
 }
 #endif
 
+#if HAVE_XIA
+inline XID
+Packet::nexthop_neighbor_xid_anno() const
+{
+    struct click_xia_xid xid;
+    xid.type = xanno()->u32[nexthop_neighbor_xid_anno_offset / 4];
+
+    for (size_t d = 0; d < sizeof(xid.id); d++) {
+    	xid.id[d] = xanno()->u8[nexthop_neighbor_xid_anno_offset + 4 + d];
+    }
+    return XID ( xid );
+}
+
+inline void
+Packet::set_nexthop_neighbor_xid_anno(XID x)
+{
+    struct click_xia_xid xid_temp;
+    xid_temp = x.xid();
+
+    xanno()->u32[nexthop_neighbor_xid_anno_offset / 4] = xid_temp.type;
+
+    for (size_t d = 0; d < sizeof(xid_temp.id); d++) {
+    	xanno()->u8[nexthop_neighbor_xid_anno_offset + 4 + d] = xid_temp.id[d];
+    }
+}
+#endif
+
 inline IPAddress
 Packet::dst_ip_anno() const
 {
@@ -1749,6 +1836,18 @@ inline void
 Packet::set_dst_ip_anno(IPAddress a)
 {
     xanno()->u32[dst_ip_anno_offset / 4] = a.addr();
+}
+
+inline IPAddress
+Packet::src_ip_anno() const
+{
+    return IPAddress(xanno()->u32[src_ip_anno_offset / 4]);
+}
+
+inline void
+Packet::set_src_ip_anno(IPAddress a)
+{
+    xanno()->u32[src_ip_anno_offset / 4] = a.addr();
 }
 
 /** @brief Set the MAC header pointer.
@@ -1886,6 +1985,20 @@ Packet::set_network_header_length(uint32_t len)
     _aa.h = _aa.nh + len;
 #endif
 }
+
+#if HAVE_XIA
+/** @brief Set the network header pointer to an XIA header.
+ * @param xiah new XIA header pointer
+ * @param len new XIA header length in bytes
+ * @post (char *) network_header() == (char *) @a xiah
+ * @post network_header_length() == @a len
+ * @post (char *) transport_header() == (char *) @a xiah + @a len */
+inline void
+Packet::set_xia_header(const click_xia *xiah, uint32_t len)
+{
+    set_network_header(reinterpret_cast<const unsigned char *>(xiah), len);
+}
+#endif
 
 /** @brief Set the network header pointer to an IPv4 header.
  * @param iph new IP header pointer
@@ -2399,6 +2512,14 @@ WritablePacket::ip6_header() const
 {
     return const_cast<click_ip6 *>(Packet::ip6_header());
 }
+
+#if HAVE_XIA
+inline click_xia *
+WritablePacket::xia_header() const
+{
+    return const_cast<click_xia *>(Packet::xia_header());
+}
+#endif
 
 inline click_icmp *
 WritablePacket::icmp_header() const

@@ -821,6 +821,7 @@ enable_aqm
 enable_ethernet
 enable_etherswitch
 enable_grid
+enable_xia
 enable_icmp
 enable_ip
 enable_ip6
@@ -1510,6 +1511,7 @@ Optional Features:
   --disable-ethernet      do not include Ethernet elements
   --enable-etherswitch    include Ethernet switch elements
   --enable-grid           include Grid elements (see FAQ)
+  --disable-xia           do not include XIA elements
   --disable-icmp          do not include ICMP elements
   --disable-ip            do not include IP elements
   --enable-ip6            include IPv6 elements
@@ -6965,6 +6967,17 @@ else
 fi
 test "x$enable_all_elements" = xyes -a \( "x$enable_grid" = xNO -o "x$enable_grid" = x \) && enable_grid=yes
 if test "x$enable_grid" = xyes; then
+    :
+
+fi
+# Check whether --enable-xia was given.
+if test "${enable_xia+set}" = set; then :
+  enableval=$enable_xia;
+else
+  enable_xia=yes
+fi
+test "x$enable_all_elements" = xyes -a \( "x$enable_xia" = xNO -o "x$enable_xia" = x \) && enable_xia=yes
+if test "x$enable_xia" = xyes; then
     :
 
 fi

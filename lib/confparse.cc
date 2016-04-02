@@ -31,6 +31,11 @@
 #include <click/ipaddress.hh>
 #include <click/etheraddress.hh>
 #include <click/hashtable.hh>
+#if HAVE_XIA
+#include <click/xid.hh>
+#include <click/standard/xiaxidinfo.hh>
+
+#endif
 #if HAVE_IP6
 # include <click/ip6address.hh>
 # include <click/ip6flowid.hh>
@@ -59,6 +64,8 @@
 #else
 # include <stdarg.h>
 #endif
+
+ #include <click/xiautil.hh>
 CLICK_DECLS
 
 int cp_errno;
@@ -265,6 +272,21 @@ cp_is_click_id(const String &str)
       return false;
   return len > 0;
 }
+
+#if HAVE_XIA
+static int
+xvalue(int x)
+{
+    if (x >= '0' && x <= '9')
+        return x - '0';
+    else if (x >= 'A' && x <= 'F')
+        return x - 'A' + 10;
+    else if (x >= 'a' && x <= 'f')
+        return x - 'a' + 10;
+    else
+        return -1;
+}
+#endif
 
 static const char *
 skip_comment(const char *s, const char *end)
@@ -1607,6 +1629,132 @@ cp_ip_address(const String &str, unsigned char *result
 #endif
 }
 
+#if HAVE_XIA
+bool
+cp_xid_type(const String& str, uint32_t* result)
+{
+    int r;
+
+    if (str.compare(String("UNDEF")) == 0)
+        *result = htonl(CLICK_XIA_XID_TYPE_UNDEF);
+    else if (str.compare(String("AD")) == 0)
+        *result = htonl(CLICK_XIA_XID_TYPE_AD);
+    else if (str.compare(String("CID")) == 0)
+        *result = htonl(CLICK_XIA_XID_TYPE_CID);
+    else if (str.compare(String("HID")) == 0)
+        *result = htonl(CLICK_XIA_XID_TYPE_HID);
+    else if (str.compare(String("SID")) == 0)
+        *result = htonl(CLICK_XIA_XID_TYPE_SID);
+    else if (str.compare(String("IP")) == 0)
+        *result = htonl(CLICK_XIA_XID_TYPE_IP);
+    else if ((r = XidMap::id(str)) >= 0)
+        *result = htonl(r);
+    else if (!cp_integer(str, result)) {      // TODO: apply htonl (also change xiarandomize.cc)
+        click_chatter("unrecognized XID type: %s\n", str.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool
+cp_xid(const String& str, XID* xid  CP_CONTEXT)
+{
+    struct click_xia_xid xid_c;
+    if (!cp_xid(str, &xid_c  CP_PASS_CONTEXT))
+        return false;
+    *xid = xid_c;
+    return true;
+}
+
+bool
+cp_xid(const String& str, struct click_xia_xid* xid  CP_CONTEXT)
+{
+#ifndef CLICK_TOOL
+    if (context)
+        if (XIAXIDInfo::query_xid(str, xid, context))
+            return true;
+#endif
+
+    int delim = str.find_left(":", 0);
+    String type_str, xid_str;
+
+    if (delim == -1)
+    {
+        click_chatter("invalid XID format: %s\n", str.c_str());
+        return false;
+    }
+
+    type_str = str.substring(0, delim);
+    xid_str = str.substring(delim + 1);
+    //click_chatter("type %s. %s %d", type_str.c_str(), xid_str.c_str(), xid.type);
+
+    uint32_t xid_type;
+    if (!cp_xid_type(type_str, &xid_type))
+        return false;
+    xid->type = xid_type;
+
+    int len = xid_str.length();
+    int i = 0;
+    //click_chatter("size xid %d %s\n", sizeof(xid.xid), xid_str.c_str());
+
+    if(xid->type == htonl(CLICK_XIA_XID_TYPE_IP)) {
+        memset(xid->id,0,sizeof(xid->id));
+        xid->id[0] = 0x45;
+        xid->id[5] = 0x01;
+        xid->id[8] = 0xFA;
+        xid->id[9] = 0xFA;
+
+        IPAddress ip;
+        if (IPAddressArg().parse(xid_str,ip CP_PASS_CONTEXT)) {  // if we've already converted this 4ID to hex format, the IP parse will fail and we won't do it again
+        	uint32_t uintip = ip;
+
+        	xid->id[16] = *(((unsigned char*)&uintip)+0);
+        	xid->id[17] = *(((unsigned char*)&uintip)+1);
+        	xid->id[18] = *(((unsigned char*)&uintip)+2);
+        	xid->id[19] = *(((unsigned char*)&uintip)+3);
+        	return true;
+		}
+    }
+
+    for (size_t d = 0; d < sizeof(xid->id); d++) {
+        if (i < len - 1 && isxdigit(xid_str[i]) && isxdigit(xid_str[i + 1])) {
+           // can read two chars
+           xid->id[d] = xvalue(xid_str[i]) * 16 + xvalue(xid_str[i + 1]);
+           //click_chatter("i %d xid_str %c %c\n", i, xid_str[i], xid_str[i+1]);
+           i += 2;
+        } else {
+            xid->id[d] = 0;
+        }
+    }
+    if (static_cast<size_t>(len) < sizeof(xid->id) * 2)
+        click_chatter("too short xid: %s\n", str.c_str());
+    if (static_cast<size_t>(len) > sizeof(xid->id) * 2)
+        click_chatter("truncated xid: %s\n", str.c_str());
+    return true;
+}
+
+bool
+cp_xia_path(const String& str, XIAPath* xia_path  CP_CONTEXT)
+{
+    *xia_path = XIAPath();
+    return xia_path->parse(str  CP_PASS_CONTEXT);
+}
+
+bool
+cp_xia_path_dag(const String& str, XIAPath* xia_path  CP_CONTEXT)
+{
+    *xia_path = XIAPath();
+    return xia_path->parse_dag(str  CP_PASS_CONTEXT);
+}
+
+bool
+cp_xia_path_re(const String& str, XIAPath* xia_path  CP_CONTEXT)
+{
+    *xia_path = XIAPath();
+    return xia_path->parse_re(str  CP_PASS_CONTEXT);
+}
+#endif
+
 bool
 cp_ip_prefix(const String &str,
 	     unsigned char *result_addr, unsigned char *result_mask,
@@ -2215,6 +2363,13 @@ const CpVaParseCmd
   cpTimeval		= "timeval",
   cpBandwidth		= "bandwidth_Bps",
   cpIPAddress		= "ip_addr",
+#if HAVE_XIA
+  cpXIDType		 = "xid_type",
+  cpXID			= "xid",
+  cpXIAPath		= "xia_path",
+  cpXIAPathDAG		= "xia_path_dag",
+  cpXIAPathRE		= "xia_path_re",
+#endif
   cpIPPrefix		= "ip_prefix",
   cpIPAddressOrPrefix	= "ip_addr_or_prefix",
   cpIPAddressList	= "ip_addr_list",
@@ -2279,6 +2434,13 @@ enum {
   cpiTimeval,
   cpiBandwidth,
   cpiIPAddress,
+#if HAVE_XIA
+  cpiXIDType,
+  cpiXID,
+  cpiXIAPath,
+  cpiXIAPathDAG,
+  cpiXIAPathRE,
+#endif
   cpiIPPrefix,
   cpiIPAddressOrPrefix,
   cpiIPAddressList,
@@ -2609,6 +2771,33 @@ default_parsefunc(cp_value *v, const String &arg,
       break;
   }
 
+#if HAVE_XIA
+   case cpiXIDType:
+    if (!cp_xid_type(arg, &v->v.xid_type))
+      goto type_mismatch;
+    break;
+
+   case cpiXID:
+    if (!cp_xid(arg, &v->v.xid CP_PASS_CONTEXT))
+      goto type_mismatch;
+    break;
+
+   case cpiXIAPath:
+    if (!cp_xia_path(arg, &v->xia_path CP_PASS_CONTEXT))
+      goto type_mismatch;
+    break;
+
+   case cpiXIAPathDAG:
+    if (!cp_xia_path_dag(arg, &v->xia_path CP_PASS_CONTEXT))
+      goto type_mismatch;
+    break;
+
+   case cpiXIAPathRE:
+    if (!cp_xia_path_re(arg, &v->xia_path CP_PASS_CONTEXT))
+      goto type_mismatch;
+    break;
+#endif
+
    case cpiIPAddress:
     if (!cp_ip_address(arg, v->v.address CP_PASS_CONTEXT))
       goto type_mismatch;
@@ -2863,6 +3052,28 @@ default_storefunc(cp_value *v  CP_CONTEXT)
      vstore->push_back(v->v_string.substring(pos));
      break;
    }
+
+#if HAVE_XIA
+   case cpiXIDType: {
+     uint32_t* xid_type_store = (uint32_t*)v->store;
+     *xid_type_store = v->v.xid_type;
+     break;
+   }
+
+   case cpiXID: {
+     struct click_xia_xid* xid_store = (struct click_xia_xid*)v->store;
+     *xid_store = v->v.xid;
+     break;
+   }
+
+   case cpiXIAPath:
+   case cpiXIAPathDAG:
+   case cpiXIAPathRE: {
+     XIAPath* xia_path_store = (XIAPath*)v->store;
+     *xia_path_store = v->xia_path;
+     break;
+   }
+#endif
 
    case cpiIPAddress:
     helper = 4;
@@ -4215,6 +4426,13 @@ cp_va_static_initialize()
     cp_register_argtype(cpTimeval, "seconds since the epoch", 0, default_parsefunc, default_storefunc, cpiTimeval);
     cp_register_argtype(cpBandwidth, "bandwidth", 0, default_parsefunc, default_storefunc, cpiBandwidth);
     cp_register_argtype(cpIPAddress, "IP address", 0, default_parsefunc, default_storefunc, cpiIPAddress);
+#if HAVE_XIA
+    cp_register_argtype(cpXIDType, "XID Type", 0, default_parsefunc, default_storefunc, cpiXIDType);
+    cp_register_argtype(cpXID, "XID", 0, default_parsefunc, default_storefunc, cpiXID);
+    cp_register_argtype(cpXIAPath, "XIA path", 0, default_parsefunc, default_storefunc, cpiXIAPath);
+    cp_register_argtype(cpXIAPathDAG, "XIA path in DAG", 0, default_parsefunc, default_storefunc, cpiXIAPathDAG);
+    cp_register_argtype(cpXIAPathRE, "XIA path in RE", 0, default_parsefunc, default_storefunc, cpiXIAPathRE);
+#endif
     cp_register_argtype(cpIPPrefix, "IP address prefix", cpArgStore2, default_parsefunc, default_storefunc, cpiIPPrefix);
     cp_register_argtype(cpIPAddressOrPrefix, "IP address or prefix", cpArgStore2, default_parsefunc, default_storefunc, cpiIPAddressOrPrefix);
     cp_register_argtype(cpIPAddressList, "list of IP addresses", 0, default_parsefunc, default_storefunc, cpiIPAddressList);
