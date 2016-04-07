@@ -1382,9 +1382,7 @@ void XTRANSPORT::ProcessMigratePacket(WritablePacket *p_in)
 		return;
 	}
 
-	unsigned short _dport = sk->port;
-
-	DBG("ProcessMigrate: %s from port %d at %ld.\n", _source_xid.unparse().c_str(), _dport, Timestamp::now());
+	DBG("ProcessMigrate: %s from port %d at %ld.\n", _source_xid.unparse().c_str(), sk->port, Timestamp::now());
 
 	// Verify the MIGRATE request and start using new DAG
 	// No need to wait for an ACK because the operation is idempotent
@@ -2820,9 +2818,8 @@ void XTRANSPORT::Xfork(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 
 		sock *sk = portToSock.get(port);
 		if (sk) {
-			int ref = sk->refcount;
 			sk->refcount += increment;
-			DBG("%s refcount for %d (%d -> %d)\n", (increment > 0 ? "incrementing" : "decrementing"), port, ref, sk->refcount);
+			DBG("%s refcount for %d (%d)\n", (increment > 0 ? "incrementing" : "decrementing"), port, sk->refcount);
 			assert(sk->refcount > 0);
 		}
 	}
